@@ -1,0 +1,13 @@
+{
+  "name": "herdr-claude-usage",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Herdr mod: Claude Code's context, model and limits.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "check": "herdr-app check mods/claude-usage",
+    "install-mod": "tools/install.sh",
+    "dev": "node tools/dev.js"
+  }
+}

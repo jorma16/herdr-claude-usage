@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clean, label, sessionPids, sessionIdOf, agentInfo, rateLimits, modelWeekly, fmtTokens, fmtLeft, level, tier } from "../mods/claude-usage/logic.js";
+import { clean, label, sessionPids, sessionIdOf, agentInfo, rateLimits, modelWeekly, fmtTokens, fmtCost, fmtLeft, level, tier } from "../mods/claude-usage/logic.js";
 
 const feed = {
   session_id: "s1",
@@ -85,6 +85,13 @@ test("modelWeekly: a model's weekly limit from the usage endpoint", () => {
   assert.deepEqual(modelWeekly(usage, "fable", Date.parse("2026-11-09T00:00:00Z")), { pct: 0, resetsAt: null });
   // The endpoint answers errors in the same file when rate limited.
   assert.equal(modelWeekly('{"error":{"type":"rate_limit_error"}}', "fable", now), null);
+});
+
+test("fmtCost", () => {
+  assert.equal(fmtCost(0), "$0.00");
+  assert.equal(fmtCost(0.1713673), "$0.17");
+  assert.equal(fmtCost(12.345), "$12.35");
+  assert.equal(fmtCost(123.4), "$123");
 });
 
 test("fmtTokens and fmtLeft", () => {

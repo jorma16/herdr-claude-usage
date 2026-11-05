@@ -5,10 +5,10 @@ hands its status line:
 
 - **Agents** (`props: { "view": "agents" }`, the default): a row per Claude Code agent with
   its label, model (colored by tier: Opus red, Sonnet orange, Haiku green, others purple),
-  effort, and how full its context is (percent, tokens and a bar: green, yellow from 50%,
-  orange from 75%, red from 90%). The tooltip adds its space, session name, context size and
-  cost so far. Click a row to go to the agent. An agent shows `—` until its status line has
-  run once with the feed below.
+  effort, cost so far, and how full its context is (percent, tokens and a bar: green,
+  yellow from 50%, orange from 75%, red from 90%). The tooltip adds its space, session name
+  and context size. Click a row to go to the agent. An agent shows `—` until its status
+  line has run once with the feed below.
 - **Quota** (`props: { "view": "quota" }`): the account's 5-hour and 7-day limits, plus the
   Fable weekly limit when `usage.json` has it, each with a bar and the time left until it
   resets (exact time in the tooltip). Meant for the bottom bar, next to `workspace-status`.

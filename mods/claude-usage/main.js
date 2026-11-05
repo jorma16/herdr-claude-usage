@@ -11,7 +11,7 @@
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { agents, spaces, terminals, props, run, theme, home, readTextFile, watchFolder } from "herdr";
-import { label, tabsById, sessionPids, sessionIdOf, agentInfo, rateLimits, modelWeekly, fmtTokens, fmtLeft, level, tier } from "./logic.js";
+import { label, tabsById, sessionPids, sessionIdOf, agentInfo, rateLimits, modelWeekly, fmtTokens, fmtCost, fmtLeft, level, tier } from "./logic.js";
 
 // Fill colors by level (see logic.js), readable on light and dark themes.
 const LEVEL_COLORS = ["#2ea043", "#d4a72c", "#e36209", "#d73a49"];
@@ -148,7 +148,7 @@ export default class ClaudeUsage extends View {
       a.space_name,
       info.name,
       info.ctxTokens !== null && info.ctxSize ? `context ${fmtTokens(info.ctxTokens)} of ${fmtTokens(info.ctxSize)}` : null,
-      info.cost !== null ? `$${info.cost.toFixed(2)} this session` : null,
+      info.cost !== null ? `${fmtCost(info.cost)} this session` : null,
     ].filter(Boolean).join(" · ");
     const model = [info.model, info.effort, info.fast ? "fast" : null].filter(Boolean);
     return el.tooltip(tip)
@@ -157,6 +157,7 @@ export default class ClaudeUsage extends View {
         .child(div().flex_none().text_color(TIER_COLORS[tier(info.model)]).child(model[0] ?? "?"))
         .when(model.length > 1, (h) => h.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(model.slice(1).join(" · "))))
         .when(model.length <= 1, (h) => h.child(div().flex_1()))
+        .when(info.cost !== null, (h) => h.child(div().flex_none().text_color(t.muted).child(fmtCost(info.cost))))
         .when(info.ctxTokens !== null, (h) => h.child(div().flex_none().text_color(t.dim).child(fmtTokens(info.ctxTokens)))))
       .when(pct !== null, (el) => el.child(bar(t, pct, "100%")));
   }

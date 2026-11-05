@@ -97,6 +97,11 @@ export function fmtTokens(n) {
   return String(Math.round(n));
 }
 
+// A session's cost: 0.1713 -> "$0.17", 12.345 -> "$12.35", 123.4 -> "$123".
+export function fmtCost(usd) {
+  return `$${usd >= 100 ? Math.round(usd) : usd.toFixed(2)}`;
+}
+
 // Time left until `at` (ms), short: "2d3h", "4h13m", "45m", "now".
 export function fmtLeft(at, now) {
   const left = Math.floor((at - now) / 1000);

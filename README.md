@@ -86,6 +86,31 @@ The limits, next to the status bar: turn `main`'s `status` block into a row.
 
 Check `~/.config/herdr-app/layout.error` afterwards.
 
+### Install with an agent
+
+Open an agent (Claude Code, for one) in this repo and paste:
+
+```text
+Install the Herdr mod in this repo (herdr-claude-usage). Read README.md and
+~/.config/herdr-app/AGENTS.md first; they win over what you think you know.
+
+1. The feed: look at "statusLine" in ~/.claude/settings.json. If it runs a script, show me
+   README.md's feed block and where you'd add it in that script (right after it reads its
+   input), and add it once I agree. If I have no status line, offer to create
+   ~/.claude/statusline-command.sh with just the feed block and a short line of output,
+   and point "statusLine" at it.
+2. Run tools/install.sh (it copies the mod into ~/.config/herdr-app/mods/claude-usage).
+3. Find my active layout. If it's one of Herdr's (main, terminals, win98), clone it with
+   `herdr-app do layout.clone '{"name":"main","as":"my-main"}'` (with its name); if it's
+   already mine, edit that one, keeping a backup copy next to it.
+4. Add README.md's "claude" block to the sidebar (under sidebar-lists in a clone of main),
+   and turn the status bar block into README.md's "status-row" with the "quota" block.
+   If my layout has no sidebar or status bar, ask me where to put them.
+5. Check there's no ~/.config/herdr-app/layout.error, run
+   `herdr-app check ~/.config/herdr-app/mods/claude-usage`, and take a `herdr-app shot`
+   to see both blocks. Agents show "—" until their status line runs once with the feed.
+```
+
 ## Develop
 
 ```sh

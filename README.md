@@ -7,7 +7,10 @@ hands its status line:
   its label, model (colored by tier: Opus red, Sonnet orange, Haiku green, others purple),
   effort, cost so far, and how full its context is (percent, tokens and a bar: green,
   yellow from 50%, orange from 75%, red from 90%). The tooltip adds its space, session name
-  and context size. Click a row to go to the agent. An agent shows `—` until its status
+  and context size. Click a row to go to the agent. Right-click it for a panel with all it
+  knows (model id, context, cost, time, lines changed, folder, Claude Code version) and to
+  change its effort or model: it types `/effort <level>` or `/model <alias>` into the agent
+  with `hc send`, only while the agent isn't working. An agent shows `—` until its status
   line has run once with the feed below.
 - **Quota** (`props: { "view": "quota" }`): the account's 5-hour and 7-day limits, plus the
   Fable weekly limit when `usage.json` has it, each with a bar and the time left until it

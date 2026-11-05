@@ -59,6 +59,13 @@ export function agentInfo(text) {
     ctxSize: num(cw.context_window_size),
     cost: num(j.cost?.total_cost_usd),
     name: j.session_name || null,
+    modelId: j.model?.id || null,
+    cwd: j.workspace?.current_dir || j.cwd || null,
+    version: j.version || null,
+    durationMs: num(j.cost?.total_duration_ms),
+    apiMs: num(j.cost?.total_api_duration_ms),
+    linesAdded: num(j.cost?.total_lines_added),
+    linesRemoved: num(j.cost?.total_lines_removed),
   };
 }
 
@@ -102,6 +109,20 @@ export function fmtCost(usd) {
   return `$${usd >= 100 ? Math.round(usd) : usd.toFixed(2)}`;
 }
 
+// A duration, short: 45000 -> "45s", 754000 -> "12m", 7500000 -> "2h5m".
+export function fmtDuration(ms) {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return h > 0 ? `${h}h${m}m` : `${m}m`;
+}
+
+// A path with the home folder as "~".
+export function shortPath(path, home) {
+  return home && (path === home || path.startsWith(`${home}/`)) ? `~${path.slice(home.length)}` : path;
+}
+
 // Time left until `at` (ms), short: "2d3h", "4h13m", "45m", "now".
 export function fmtLeft(at, now) {
   const left = Math.floor((at - now) / 1000);
@@ -126,4 +147,10 @@ export function level(pct) {
 export function tier(model) {
   const m = (model ?? "").toLowerCase();
   return ["opus", "sonnet", "haiku"].find((t) => m.includes(t)) ?? "other";
+}
+
+// The model's family, as the alias `/model` takes: "fable", "opus", "sonnet", "haiku", or null.
+export function family(model) {
+  const m = (model ?? "").toLowerCase();
+  return ["fable", "opus", "sonnet", "haiku"].find((f) => m.includes(f)) ?? null;
 }

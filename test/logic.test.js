@@ -1,13 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clean, label, sessionPids, sessionIdOf, agentInfo, rateLimits, modelWeekly, fmtTokens, fmtCost, fmtLeft, level, tier } from "../mods/claude-usage/logic.js";
+import { clean, label, sessionPids, sessionIdOf, agentInfo, rateLimits, modelWeekly, fmtTokens, fmtCost, fmtDuration, shortPath, fmtLeft, level, tier, family } from "../mods/claude-usage/logic.js";
 
 const feed = {
   session_id: "s1",
   session_name: "Fix login",
   effort: { level: "high" },
   model: { id: "claude-opus-5-5", display_name: "Opus 5.5" },
-  cost: { total_cost_usd: 1.35 },
+  cost: { total_cost_usd: 1.35, total_duration_ms: 754000, total_api_duration_ms: 120000, total_lines_added: 12, total_lines_removed: 3 },
+  cwd: "/home/me/other",
+  workspace: { current_dir: "/home/me/app" },
+  version: "2.1.318",
   context_window: {
     total_input_tokens: 92412,
     context_window_size: 1000000,
@@ -49,6 +52,13 @@ test("agentInfo: model, effort and context from the status line input", () => {
     ctxSize: 1000000,
     cost: 1.35,
     name: "Fix login",
+    modelId: "claude-opus-5-5",
+    cwd: "/home/me/app",
+    version: "2.1.318",
+    durationMs: 754000,
+    apiMs: 120000,
+    linesAdded: 12,
+    linesRemoved: 3,
   });
   assert.equal(agentInfo(null), null);
   assert.equal(agentInfo("{"), null);
@@ -94,6 +104,15 @@ test("fmtCost", () => {
   assert.equal(fmtCost(123.4), "$123");
 });
 
+test("fmtDuration and shortPath", () => {
+  assert.equal(fmtDuration(45000), "45s");
+  assert.equal(fmtDuration(754000), "12m");
+  assert.equal(fmtDuration(7500000), "2h5m");
+  assert.equal(shortPath("/home/me/app", "/home/me"), "~/app");
+  assert.equal(shortPath("/home/me", "/home/me"), "~");
+  assert.equal(shortPath("/home/meow", "/home/me"), "/home/meow");
+});
+
 test("fmtTokens and fmtLeft", () => {
   assert.equal(fmtTokens(950), "950");
   assert.equal(fmtTokens(4322), "4.3K");
@@ -113,4 +132,13 @@ test("level and tier", () => {
   assert.equal(tier("Haiku 5.5"), "haiku");
   assert.equal(tier("Fable 5.1"), "other");
   assert.equal(tier(null), "other");
+});
+
+test("family: the alias /model takes", () => {
+  assert.equal(family("Fable 5.1"), "fable");
+  assert.equal(family("Opus 5.5"), "opus");
+  assert.equal(family("claude-sonnet-5-5"), "sonnet");
+  assert.equal(family("Haiku 5.5"), "haiku");
+  assert.equal(family("GPT"), null);
+  assert.equal(family(null), null);
 });

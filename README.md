@@ -14,7 +14,10 @@ hands its status line:
   types `/effort <level>`, `/model <alias>` or `/compact` into the agent with `hc send`,
   only while the agent isn't working. An agent shows `—` until its status line has run once
   with the feed below, and a new session shows `—` until its first turn. It notifies once
-  when an agent's context reaches 90%; clicking the notification goes to it.
+  when an agent's context reaches 90%; clicking the notification goes to it. Press
+  `cmd-shift-o` to open in the browser the open PRs of the focused agent's branch (with
+  `gh pr list --head <branch>` in its folder); add `"cmd-shift-o": "claude-usage.pr"` to
+  `global` in `~/.config/herdr-app/keys.json`.
 - **Quota** (`props: { "view": "quota" }`): the account's 5-hour and 7-day limits, plus each
   model's weekly limit when `usage.json` has them (Fable, say), each with a bar and the time
   left until it resets (exact time in the tooltip). Click it for a panel with each limit's
@@ -27,8 +30,8 @@ hands its status line:
 
 Both follow light and dark themes (darker colors on light ones).
 
-It doesn't call any API: it reads files, runs `stat` on `latest.json` for its age, and runs
-`hc send` only when you click a chip. It refreshes when the feed folder changes
+It doesn't call any API on its own: it reads files, runs `stat` on `latest.json` for its age,
+runs `hc send` only when you click a chip, and `gh pr list` only when you press the PR key. It refreshes when the feed folder changes
 (`watchFolder`), plus a 30 s timer for new agents and the countdowns.
 
 ### Options (props)

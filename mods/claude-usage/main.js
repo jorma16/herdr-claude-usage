@@ -4,6 +4,7 @@
 //                       how full its context is, blocked ones first. Click a row to go to the
 //                       agent; right-click it for its details and to change its effort or
 //                       model (or compact it). It warns once when an agent's context nears full.
+//                       The "pr" key command opens the focused agent's open PRs (gh).
 //   "quota":            the account's limits (5 hours, 7 days, and the per-model weekly ones
 //                       when the usage cache has them), each with the time left until it
 //                       resets, dimmed when the data is old.
@@ -19,8 +20,8 @@
 
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex, Popover } from "gpui-base";
-import { agents, spaces, terminals, props, run, theme, home, readTextFile, watchFolder, hc, exec, notify, shared, setShared } from "herdr";
-import { label, tabsById, sessionPids, sessionIdOf, agentInfo, rateLimits, weeklyLimits, pickWeekly, usageOk, isFresh, totalCost, blockedFirst, alertOptions, contextAlerts, fmtAgo, extraUsage, pace, fitLevel, limitAlerts, pickAlert, fmtTokens, fmtCost, fmtDuration, shortPath, fmtLeft, fmtWhen, isLight, level, tier, family } from "./logic.js";
+import { agents, spaces, panes, terminals, props, nextCommand, run, theme, home, readTextFile, watchFolder, hc, exec, notify, shared, setShared } from "herdr";
+import { label, tabsById, sessionPids, sessionIdOf, agentInfo, rateLimits, weeklyLimits, pickWeekly, usageOk, isFresh, totalCost, blockedFirst, alertOptions, contextAlerts, fmtAgo, extraUsage, pace, fitLevel, limitAlerts, pickAlert, fmtTokens, fmtCost, fmtDuration, shortPath, fmtLeft, fmtWhen, isLight, level, tier, family, prUrls } from "./logic.js";
 
 // Colors by level (see logic.js) and by model price tier (as in the status line: opus red,
 // sonnet orange, haiku green), with darker ones that stay readable on a light theme.
@@ -83,7 +84,14 @@ export default class ClaudeUsage extends View {
     this.avail = null; // the quota strip's width for its items, once laid out
     this.widths = {}; // quota layout level -> the items' measured width
     this.watch(cx, this.dir);
-    if (this.view === "agents") this.watch(cx, this.sessions);
+    if (this.view === "agents") {
+      this.watch(cx, this.sessions);
+      // Key commands ("cmd-shift-o": "claude-usage.pr" in keys.json). Only this view's copy
+      // takes them, so a docked quota strip doesn't open the PRs twice.
+      cx.spawn(async () => {
+        for (;;) if ((await nextCommand()) === "pr") this.openPrs();
+      });
+    }
     cx.timer.every(TICK, (cx) => {
       this.reload(cx);
       if (this.view === "quota") {
@@ -391,6 +399,27 @@ export default class ClaudeUsage extends View {
     }
     const same = out.sent.size === sent.size && [...out.sent].every((id) => sent.has(id));
     if (!same) setShared(CTX_KEY, [...out.sent]);
+  }
+
+  // Opens in the browser the open PRs of the focused terminal's branch (`gh pr list`, run in its
+  // folder on its machine), or says why there's none.
+  async openPrs() {
+    const say = (title, body, lvl = "info") => notify({ title, body, level: lvl });
+    const pane = panes().find((p) => p.focused && p.terminal);
+    if (!pane?.cwd || !pane.branch) return say("No branch here", "The focused pane isn't a terminal in a git repo.");
+    const machine = spaces().find((s) => s.tabs.some((t) => t.id === pane.tab))?.machine ?? null;
+    let r;
+    try {
+      r = await exec("gh", ["pr", "list", "--head", pane.branch, "--state", "open", "--json", "url"], { cwd: pane.cwd, on: machine });
+    } catch (e) {
+      return say("Couldn't run gh", String(e?.message ?? e), "error");
+    }
+    if (r.code !== 0) return say("gh pr list failed", r.stderr.trim() || `gh exited with ${r.code}`, "error");
+    const urls = prUrls(r.stdout);
+    if (urls.length === 0) return say("No open PR", `Nothing open for ${pane.branch}.`);
+    for (const url of urls) {
+      await exec("open", [url]).catch(() => exec("xdg-open", [url]).catch(() => say("Couldn't open the PR", url, "error")));
+    }
   }
 
   // Types a slash command into the agent (hc pastes it and presses Enter), then closes the panel.

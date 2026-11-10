@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clean, label, sessionPids, sessionIdOf, agentInfo, rateLimits, weeklyLimits, pickWeekly, usageOk, isFresh, totalCost, blockedFirst, alertOptions, contextAlerts, fmtAgo, extraUsage, pace, fitLevel, limitAlerts, pickAlert, fmtTokens, fmtCost, fmtDuration, shortPath, fmtLeft, fmtWhen, isLight, level, tier, family } from "../mods/claude-usage/logic.js";
+import { clean, label, sessionPids, sessionIdOf, agentInfo, rateLimits, weeklyLimits, pickWeekly, usageOk, isFresh, totalCost, blockedFirst, alertOptions, contextAlerts, fmtAgo, extraUsage, pace, fitLevel, limitAlerts, pickAlert, fmtTokens, fmtCost, fmtDuration, shortPath, fmtLeft, fmtWhen, isLight, level, tier, family, prUrls } from "../mods/claude-usage/logic.js";
 
 const feed = {
   session_id: "s1",
@@ -313,4 +313,13 @@ test("family: the alias /model takes", () => {
   assert.equal(family("Haiku 5.5"), "haiku");
   assert.equal(family("GPT"), null);
   assert.equal(family(null), null);
+});
+
+test("prUrls: the open PRs gh lists", () => {
+  const out = JSON.stringify([{ url: "https://github.com/o/r/pull/7" }, { url: "https://github.com/o/r/pull/9" }, { number: 3 }]);
+  assert.deepEqual(prUrls(out), ["https://github.com/o/r/pull/7", "https://github.com/o/r/pull/9"]);
+  assert.deepEqual(prUrls("[]"), []);
+  assert.deepEqual(prUrls("not json"), []);
+  assert.deepEqual(prUrls(null), []);
+  assert.deepEqual(prUrls('{"url":"https://x"}'), []);
 });

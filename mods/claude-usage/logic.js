@@ -333,3 +333,9 @@ export function family(model) {
   const m = (model ?? "").toLowerCase();
   return ["fable", "opus", "sonnet", "haiku"].find((f) => m.includes(f)) ?? null;
 }
+
+// The open PRs' URLs in `gh pr list --json url` output, or [] for anything else.
+export function prUrls(text) {
+  const list = parse(text);
+  return Array.isArray(list) ? list.map((p) => p?.url).filter((u) => typeof u === "string" && u.startsWith("https://")) : [];
+}

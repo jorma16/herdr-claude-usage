@@ -6,7 +6,8 @@ A strip in the bottom bar shows the account's 5-hour and 7-day limits and the pe
 weekly ones, with the time left until each resets. Clicking the strip opens a panel with
 each limit's reset time and where it's heading. Notifications warn you when a limit is
 running out or an agent's context is nearly full. Right-clicking an agent shows
-everything known about it and lets you switch its effort or model, or compact it. All of
+everything known about it and lets you switch its effort or model, or compact it. A key
+(`cmd-shift-o`) opens the focused agent's open PRs in the browser. All of
 it comes from what Claude Code hands its status line command.
 
 ![Claude usage](preview.png)
@@ -116,6 +117,13 @@ One mod, `claude-usage`, with two views chosen by `props.view`.
   own."). It's sent once per session when the context reaches `context` (90% by
   default), and again only after it has dropped 20 points below that. Clicking it runs
   `agent.focus { terminal }`.
+- Press `cmd-shift-o` (`"cmd-shift-o": "claude-usage.pr"` in `keys.json`'s `global`): the
+  agents view's copy gets `"pr"` from `nextCommand()`, takes the focused terminal pane's
+  `cwd` and `branch` (`panes()`), runs `gh pr list --head <branch> --state open --json url`
+  there (`exec` with `on` set to its space's machine) and opens each URL with `open`
+  (`xdg-open` as a fallback). With no branch, no PR or a failing `gh`, a notification says
+  so ("No open PR", body "Nothing open for master."). The quota copy ignores it, so a PR
+  never opens twice.
 - Props: `"weekly"`: `true` (default, every per-model weekly limit), `false` (none), or
   names (`["fable"]`, matched case-insensitively). `"alerts"`: `false` turns every
   notification off, or `{ "warn": 75, "critical": 90, "pace": 25, "context": 90 }` with
@@ -129,9 +137,10 @@ One mod, `claude-usage`, with two views chosen by `props.view`.
 
 - Files: `mods/claude-usage/` with `mod.json` (`{ "place": "none", "title": "Claude
   usage" }`), `main.js` (both views) and `logic.js` (pure functions, no `herdr`/`gpui-*`
-  imports, so `node --test` runs them). No `keys.json`.
+  imports, so `node --test` runs them). One binding in the user's `keys.json`:
+  `"cmd-shift-o": "claude-usage.pr"`.
 - Imports: `View`, `div` (gpui-kit); `h_flex`, `v_flex`, `Popover` (gpui-base); `agents`,
-  `spaces`, `terminals`, `props`, `run`, `theme`, `home`, `readTextFile`, `watchFolder`,
+  `spaces`, `panes`, `terminals`, `props`, `nextCommand`, `run`, `theme`, `home`, `readTextFile`, `watchFolder`,
   `hc`, `exec`, `notify`, `shared`, `setShared` (herdr). Both panels are `Popover`s. The
   agent panel opens with `mouse_button("right")` and the quota panel with
   `anchor("bottom_right")`. Their open state is controlled through
@@ -174,7 +183,8 @@ One mod, `claude-usage`, with two views chosen by `props.view`.
 
 **What it touches:** it reads files outside its folder (`~/.claude/statusline/`,
 `~/.claude/sessions/`). It runs `stat` on `latest.json`, and `hc send` to type into an
-agent, but only when you click a chip. It never reaches the network: `usage.json` is
+agent, but only when you click a chip, and `gh pr list` plus `open` when you press
+`cmd-shift-o` (gh calls GitHub). Otherwise it never reaches the network: `usage.json` is
 written by the user's script, if at all.
 
 ## Watch out
@@ -227,4 +237,6 @@ written by the user's script, if at all.
   time left. At 450px everything is back.
 - A limit past 75% posts one warning, and reinstalling the mod doesn't post it again. An
   agent past 90% context posts one warning, and clicking it focuses the agent.
+- With the focus on an agent whose branch has an open PR, `cmd-shift-o` opens it in the
+  browser; on `master` it posts "No open PR".
 - With `"appearance": "light"`, the percents and model names use the darker set.

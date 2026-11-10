@@ -138,6 +138,39 @@ export function pace(l, windowMs, now) {
   };
 }
 
+// The fullest of `count` layouts (0 the fullest) that fits `avail` px, given the widths
+// measured so far (level -> px). A level not measured yet is tried; if none fits, the last.
+export function fitLevel(widths, avail, count) {
+  for (let i = 0; i < count; i++) if (widths[i] === undefined || widths[i] <= avail) return i;
+  return count - 1;
+}
+
+// What's worth a notification about a limit now, most serious first: past 90%, past 75%,
+// or (from 25%) filling up before it resets. Each has an id unique to its window, so it's
+// sent once per window. `l` is { name, what, pct, resetsAt }, `p` its pace (or null).
+export function limitAlerts(l, p, now) {
+  if (!l?.resetsAt) return [];
+  const id = (kind) => `${l.name}@${l.resetsAt}:${kind}`;
+  const pct = Math.round(l.pct);
+  const resets = `resets ${fmtWhen(l.resetsAt, now)} (in ${fmtLeft(l.resetsAt, now)})`;
+  const full = p?.fullAt ? `At this rate, full ${fmtWhen(p.fullAt, now)}, ${resets}` : null;
+  const out = [];
+  if (l.pct >= 90) out.push({ id: id(90), level: "error", title: `Claude ${l.what} at ${pct}%`, body: full ?? `It ${resets}` });
+  if (l.pct >= 75) out.push({ id: id(75), level: "warning", title: `Claude ${l.what} at ${pct}%`, body: full ?? `It ${resets}` });
+  if (full && l.pct >= 25 && l.pct < 90) {
+    out.push({ id: id("pace"), level: "warning", title: `Claude ${l.what} filling up: ${pct}% used`, body: full });
+  }
+  return out;
+}
+
+// Which alert to send from limitAlerts' list, given the ids already sent: the most serious
+// one if it's new, else none. `mark` is every id in the list, so a lesser one isn't sent
+// after a worse one (or alongside it) in the same window.
+export function pickAlert(alerts, sent) {
+  if (alerts.length === 0 || sent.has(alerts[0].id)) return { alert: null, mark: [] };
+  return { alert: alerts[0], mark: alerts.map((a) => a.id) };
+}
+
 // 4322 -> "4.3K", 200000 -> "200K", 1200000 -> "1.2M".
 export function fmtTokens(n) {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, "")}M`;

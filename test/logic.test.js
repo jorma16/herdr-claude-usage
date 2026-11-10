@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clean, label, sessionPids, sessionIdOf, agentInfo, rateLimits, modelWeekly, modelShare, extraUsage, pace, fmtTokens, fmtCost, fmtDuration, shortPath, fmtLeft, fmtWhen, level, tier, family } from "../mods/claude-usage/logic.js";
+import { clean, label, sessionPids, sessionIdOf, agentInfo, rateLimits, modelWeekly, modelShare, extraUsage, pace, fitLevel, limitAlerts, pickAlert, fmtTokens, fmtCost, fmtDuration, shortPath, fmtLeft, fmtWhen, level, tier, family } from "../mods/claude-usage/logic.js";
 
 const feed = {
   session_id: "s1",
@@ -137,6 +137,55 @@ test("pace: where a limit is heading at its current rate", () => {
   assert.equal(pace({ pct: 5, resetsAt }, 5 * H, 5.1 * H), null);
   assert.equal(pace({ pct: 5, resetsAt }, 5 * H, 11 * H), null);
   assert.equal(pace({ pct: 5, resetsAt: null }, 5 * H, 7 * H), null);
+});
+
+test("fitLevel: the fullest layout that fits", () => {
+  assert.equal(fitLevel({}, 400, 3), 0); // nothing measured: try the fullest
+  assert.equal(fitLevel({ 0: 420 }, 400, 3), 1); // too wide: try the next
+  assert.equal(fitLevel({ 0: 420, 1: 380 }, 400, 3), 1);
+  assert.equal(fitLevel({ 0: 420, 1: 380 }, 450, 3), 0); // room again: back to the fullest
+  assert.equal(fitLevel({ 0: 420, 1: 410, 2: 405 }, 400, 3), 2); // nothing fits: the last
+});
+
+test("limitAlerts and pickAlert: once per window, the most serious first", () => {
+  const H = 3600000;
+  const now = new Date(2026, 10, 10, 12, 0).getTime();
+  const resetsAt = now + 2 * H;
+  const l = (pct) => ({ name: "5h", what: "5-hour limit", pct, resetsAt });
+  const p = (pct) => pace(l(pct), 5 * H, now); // 60% of the window gone
+  assert.deepEqual(limitAlerts(l(20), p(20), now), []);
+  // 40% used at 60% of the window: on course for ~67%, no alert.
+  assert.deepEqual(limitAlerts(l(40), p(40), now), []);
+  // 70%: full before the reset.
+  const fast = limitAlerts(l(70), p(70), now);
+  assert.deepEqual(fast.map((a) => a.id), [`5h@${resetsAt}:pace`]);
+  assert.equal(fast[0].level, "warning");
+  assert.match(fast[0].body, /^At this rate, full today 13:17, resets today 14:00 \(in 2h0m\)$/);
+  // 80%: past 75%, and filling up.
+  assert.deepEqual(limitAlerts(l(80), p(80), now).map((a) => a.id), [`5h@${resetsAt}:75`, `5h@${resetsAt}:pace`]);
+  // 95%: past 90% and 75%; no pace alert on top.
+  const worst = limitAlerts(l(95), p(95), now);
+  assert.deepEqual(worst.map((a) => a.id), [`5h@${resetsAt}:90`, `5h@${resetsAt}:75`]);
+  assert.equal(worst[0].level, "error");
+  assert.equal(worst[0].title, "Claude 5-hour limit at 95%");
+  // A window that hasn't started has nothing to say.
+  assert.deepEqual(limitAlerts({ name: "5h", what: "5-hour limit", pct: 0, resetsAt: null }, null, now), []);
+
+  // Sent once: the pace alert at 70%, then nothing new until 75%.
+  const first = pickAlert(fast, new Set());
+  assert.equal(first.alert.id, `5h@${resetsAt}:pace`);
+  const sent = new Set(first.mark);
+  assert.equal(pickAlert(fast, sent).alert, null);
+  const at80 = pickAlert(limitAlerts(l(80), p(80), now), sent);
+  assert.equal(at80.alert.id, `5h@${resetsAt}:75`);
+  // Straight to 95% marks 75% too, so it isn't sent later.
+  const jump = pickAlert(worst, new Set());
+  assert.deepEqual(jump.mark, [`5h@${resetsAt}:90`, `5h@${resetsAt}:75`]);
+  assert.equal(pickAlert(limitAlerts(l(80), p(80), now), new Set(jump.mark)).alert, null);
+  // A new window starts over.
+  const next = { ...l(80), resetsAt: resetsAt + 5 * H };
+  assert.notEqual(pickAlert(limitAlerts(next, null, now), sent).alert, null);
+  assert.deepEqual(pickAlert([], new Set()), { alert: null, mark: [] });
 });
 
 test("fmtWhen: local time, with the day only when it isn't today", () => {

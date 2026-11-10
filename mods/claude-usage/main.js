@@ -5,15 +5,18 @@
 //                       details and to change its effort or model.
 //   "quota":            the account's limits (5 hours, 7 days, and a model's weekly one when
 //                       the usage cache has it), each with the time left until it resets.
-//                       Click it for each limit's reset time and where it's heading.
+//                       Click it for each limit's reset time and where it's heading. When
+//                       narrow, it drops the time left, then the bars. It also posts a
+//                       notification once per window when a limit passes 75% or 90%, or is
+//                       on course to fill up before it resets.
 // The status line script writes the feed (see README.md): ~/.claude/statusline/<session>.json,
 // latest.json (the newest of them) and, optionally, usage.json (Claude's usage endpoint).
 // Agents are matched to sessions through ~/.claude/sessions/<pid>.json, Claude Code's own.
 
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex, Popover } from "gpui-base";
-import { agents, spaces, terminals, props, run, theme, home, readTextFile, watchFolder, hc, notify } from "herdr";
-import { label, tabsById, sessionPids, sessionIdOf, agentInfo, rateLimits, modelWeekly, modelShare, extraUsage, pace, fmtTokens, fmtCost, fmtDuration, shortPath, fmtLeft, fmtWhen, level, tier, family } from "./logic.js";
+import { agents, spaces, terminals, props, run, theme, home, readTextFile, watchFolder, hc, notify, shared, setShared } from "herdr";
+import { label, tabsById, sessionPids, sessionIdOf, agentInfo, rateLimits, modelWeekly, modelShare, extraUsage, pace, fitLevel, limitAlerts, pickAlert, fmtTokens, fmtCost, fmtDuration, shortPath, fmtLeft, fmtWhen, level, tier, family } from "./logic.js";
 
 // Fill colors by level (see logic.js), readable on light and dark themes.
 const LEVEL_COLORS = ["#2ea043", "#d4a72c", "#e36209", "#d73a49"];
@@ -27,6 +30,11 @@ const WINDOW = { five: 5 * HOUR, seven: 7 * 24 * HOUR };
 // What the details panel offers: `/effort <level>` and `/model <alias>`, typed into the agent.
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const MODELS = [["fable", "Fable"], ["opus", "Opus"], ["sonnet", "Sonnet"], ["haiku", "Haiku"]];
+// The quota strip's layouts, fullest first: everything, without the time left, without bars.
+const FIT = { full: 0, noLeft: 1, noBars: 2, count: 3 };
+// Where the quota view keeps the alerts it has sent (id -> the window's reset time), so a
+// reload doesn't send them again.
+const SENT_KEY = "claude-usage.alerts";
 // Re-read now and then: new agents, and the time left until each limit resets.
 const TICK = 30000;
 
@@ -46,11 +54,16 @@ export default class ClaudeUsage extends View {
     this.usage = null; // usage.json's text
     this.key = ""; // what was last shown, to repaint only on a change
     this.menu = null; // the address whose details panel is open, or "quota"
+    this.avail = null; // the quota strip's width for its items, once laid out
+    this.widths = {}; // quota layout level -> the items' measured width
     this.watch(cx, this.dir);
     if (this.view === "agents") this.watch(cx, this.sessions);
     cx.timer.every(TICK, (cx) => {
       this.reload(cx);
-      if (this.view === "quota") cx.notify(); // the time left ticks
+      if (this.view === "quota") {
+        this.alert(Date.now());
+        cx.notify(); // the time left ticks
+      }
     });
   }
 
@@ -78,6 +91,7 @@ export default class ClaudeUsage extends View {
     if (this.view === "quota") {
       [this.latest, this.usage] = await Promise.all([text(`${this.dir}/latest.json`), text(`${this.dir}/usage.json`)]);
       key = `${this.latest}\n${this.usage}`;
+      this.alert(Date.now());
     } else {
       const pairs = sessionPids(agents(), terminals());
       const ids = await Promise.all(pairs.map(([, pid]) => text(`${this.sessions}/${pid}.json`).then(sessionIdOf)));
@@ -104,13 +118,18 @@ export default class ClaudeUsage extends View {
     const now = Date.now();
     const limits = this.limits(now);
     const open = this.menu === "quota";
-    const items = limits.map((l) => this.limit(t, l, now, !open));
+    const fit = this.avail === null ? FIT.full : fitLevel(this.widths, this.avail, FIT.count);
+    const items = limits.map((l) => this.limit(t, l, now, !open, fit));
     const strip = h_flex().id("cu-quota").size_full().px(14).items_center().justify_end()
-      .bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8).text_color(t.muted);
+      .bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8).text_color(t.muted)
+      // The items may eat into the 14px padding, down to 4px a side.
+      .on_size_change((size, cx) => this.measure(cx, "avail", size.width - 8));
     if (items.length === 0) return strip.child(div().text_color(t.dim).child("No Claude usage yet"));
-    const trigger = h_flex().id("cu-limits").h_full().px(6).gap(16).items_center().rounded(4).cursor_pointer()
+    const trigger = h_flex().id("cu-limits").flex_none().h_full().px(6).gap(fit === FIT.full ? 16 : 12).items_center()
+      .rounded(4).cursor_pointer()
       .when(open, (el) => el.bg(t.hover))
       .hover((s) => s.bg(t.hover))
+      .on_size_change((size, cx) => this.measure(cx, fit, size.width))
       .children(items);
     return strip.child(Popover.new("cu-pop-quota").anchor("bottom_right")
       .open(open)
@@ -133,15 +152,43 @@ export default class ClaudeUsage extends View {
     ].filter(([, , l]) => l).map(([name, what, l, window]) => ({ name, what, window, ...l }));
   }
 
-  limit(t, l, now, tooltip) {
+  // Keeps a width from on_size_change (the strip's room, or the items' width at a layout
+  // level) and repaints when that changes which layout fits.
+  measure(cx, what, width) {
+    const w = Math.ceil(width);
+    if (what === "avail" ? this.avail === w : this.widths[what] === w) return;
+    const before = this.avail === null ? null : fitLevel(this.widths, this.avail, FIT.count);
+    if (what === "avail") this.avail = w;
+    else this.widths[what] = w;
+    if (fitLevel(this.widths, this.avail, FIT.count) !== before) cx.notify();
+  }
+
+  // Posts what limitAlerts finds new, at most one per limit, and remembers it until the
+  // window resets.
+  alert(now) {
+    const stored = shared(SENT_KEY);
+    const sent = Object.fromEntries(Object.entries(stored && typeof stored === "object" ? stored : {})
+      .filter(([, at]) => typeof at === "number" && at > now));
+    let changed = Object.keys(sent).length !== Object.keys(stored ?? {}).length;
+    for (const l of this.limits(now)) {
+      const { alert, mark } = pickAlert(limitAlerts(l, pace(l, l.window, now), now), new Set(Object.keys(sent)));
+      if (!alert) continue;
+      notify({ title: alert.title, body: alert.body, level: alert.level });
+      for (const id of mark) sent[id] = l.resetsAt;
+      changed = true;
+    }
+    if (changed) setShared(SENT_KEY, sent);
+  }
+
+  limit(t, l, now, tooltip, fit) {
     const left = l.resetsAt ? fmtLeft(l.resetsAt, now) : null;
     const tip = `${l.what}: ${Math.round(l.pct)}% used${l.resetsAt ? `, resets ${fmtWhen(l.resetsAt, now)} (in ${left})` : ""}`;
     return h_flex().id(`cu-${l.name}`).flex_none().gap(6).items_center()
       .when(tooltip, (el) => el.tooltip(`${tip} · click for details`))
       .child(div().text_color(t.dim).child(l.name))
-      .child(bar(t, l.pct, 36))
+      .when(fit < FIT.noBars, (el) => el.child(bar(t, l.pct, 36)))
       .child(div().font_medium().text_color(LEVEL_COLORS[level(l.pct)]).child(`${Math.round(l.pct)}%`))
-      .when(Boolean(left), (el) => el.child(div().text_color(t.dim).child(left)));
+      .when(Boolean(left) && fit < FIT.noLeft, (el) => el.child(div().text_color(t.dim).child(left)));
   }
 
   // The click panel: each limit with its reset time and pace, then the plan's extras.

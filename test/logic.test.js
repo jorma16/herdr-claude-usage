@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clean, label, sessionPids, sessionIdOf, agentInfo, rateLimits, modelWeekly, modelShare, extraUsage, pace, fitLevel, limitAlerts, pickAlert, fmtTokens, fmtCost, fmtDuration, shortPath, fmtLeft, fmtWhen, level, tier, family } from "../mods/claude-usage/logic.js";
+import { clean, label, sessionPids, sessionIdOf, agentInfo, rateLimits, weeklyLimits, pickWeekly, usageOk, isFresh, totalCost, blockedFirst, alertOptions, contextAlerts, fmtAgo, extraUsage, pace, fitLevel, limitAlerts, pickAlert, fmtTokens, fmtCost, fmtDuration, shortPath, fmtLeft, fmtWhen, isLight, level, tier, family } from "../mods/claude-usage/logic.js";
 
 const feed = {
   session_id: "s1",
@@ -44,6 +44,7 @@ test("sessionIdOf reads Claude Code's session file", () => {
 
 test("agentInfo: model, effort and context from the status line input", () => {
   assert.deepEqual(agentInfo(JSON.stringify(feed)), {
+    sessionId: "s1",
     model: "Opus 5.5",
     effort: "high",
     fast: false,
@@ -82,34 +83,95 @@ test("rateLimits: percent and reset time in ms; a window that reset reads 0%", (
   assert.deepEqual(rateLimits(null, 0), { five: null, seven: null });
 });
 
-test("modelWeekly: a model's weekly limit from the usage endpoint", () => {
-  const usage = JSON.stringify({
-    limits: [
-      { kind: "five_hour", percent: 50 },
-      { kind: "weekly_scoped", percent: 12, resets_at: "2026-11-08T00:59:59.443+00:00", scope: { model: { display_name: "Fable 5.1" } } },
-    ],
-  });
-  const now = Date.parse("2026-11-05T00:00:00Z");
-  assert.deepEqual(modelWeekly(usage, "fable", now), { pct: 12, resetsAt: Date.parse("2026-11-08T00:59:59.443Z") });
-  assert.equal(modelWeekly(usage, "opus", now), null);
-  assert.deepEqual(modelWeekly(usage, "fable", Date.parse("2026-11-09T00:00:00Z")), { pct: 0, resetsAt: null });
-  // The endpoint answers errors in the same file when rate limited.
-  assert.equal(modelWeekly('{"error":{"type":"rate_limit_error"}}', "fable", now), null);
-});
-
-test("modelShare: how much of the weekly limit a model may use", () => {
+test("weeklyLimits: every per-model weekly limit, with its share", () => {
   const usage = JSON.stringify({
     limits: [
       { kind: "session", percent: 18 },
       { kind: "weekly_all", percent: 17 },
-      { kind: "weekly_scoped", percent: 0, scope: { model: { display_name: "Fable" } } },
+      { kind: "weekly_scoped", percent: 12, resets_at: "2026-11-08T00:59:59.443+00:00", scope: { model: { display_name: "Fable" } } },
+      { kind: "weekly_scoped", percent: 40, resets_at: "2026-11-08T00:59:59Z", scope: { model: { display_name: "Opus" } } },
+      { kind: "weekly_scoped", percent: 5, scope: { surface: "web" } },
     ],
-    weekly_scoped_shares: [{ limit_index: 2, used_percent_of_weekly: 0, allowance_percent_of_weekly: 50 }],
+    weekly_scoped_shares: [{ limit_index: 2, allowance_percent_of_weekly: 50 }],
   });
-  assert.equal(modelShare(usage, "fable"), 50);
-  assert.equal(modelShare(usage, "opus"), null);
-  assert.equal(modelShare('{"limits":[]}', "fable"), null);
-  assert.equal(modelShare(null, "fable"), null);
+  const now = Date.parse("2026-11-05T00:00:00Z");
+  assert.deepEqual(weeklyLimits(usage, now), [
+    { model: "Fable", pct: 12, resetsAt: Date.parse("2026-11-08T00:59:59.443Z"), share: 50 },
+    { model: "Opus", pct: 40, resetsAt: Date.parse("2026-11-08T00:59:59Z"), share: null },
+  ]);
+  // Past its reset: 0%, no countdown.
+  assert.deepEqual(weeklyLimits(usage, Date.parse("2026-11-09T00:00:00Z"))[0], { model: "Fable", pct: 0, resetsAt: null, share: 50 });
+  // The endpoint answers errors in the same file when rate limited.
+  assert.deepEqual(weeklyLimits('{"error":{"type":"rate_limit_error"}}', now), []);
+  assert.deepEqual(weeklyLimits(null, now), []);
+});
+
+test("usageOk: a real answer, not an error", () => {
+  assert.equal(usageOk('{"limits":[]}'), true);
+  assert.equal(usageOk('{"error":{"type":"rate_limit_error"}}'), false);
+  assert.equal(usageOk(null), false);
+  assert.equal(usageOk("{not json"), false);
+});
+
+test("pickWeekly: the weekly prop", () => {
+  const list = [{ model: "Fable" }, { model: "Opus 5.5" }];
+  assert.deepEqual(pickWeekly(list, undefined), list);
+  assert.deepEqual(pickWeekly(list, true), list);
+  assert.deepEqual(pickWeekly(list, false), []);
+  assert.deepEqual(pickWeekly(list, ["opus"]), [{ model: "Opus 5.5" }]);
+  assert.deepEqual(pickWeekly(list, []), []);
+});
+
+test("isFresh, totalCost and blockedFirst", () => {
+  assert.equal(isFresh({ cost: 0, ctxTokens: 0 }), true);
+  assert.equal(isFresh({ cost: null, ctxTokens: null }), true);
+  assert.equal(isFresh({ cost: 0.01, ctxTokens: 0 }), false);
+  assert.equal(isFresh({ cost: 0, ctxTokens: 1200 }), false);
+  assert.equal(isFresh(null), false);
+  assert.equal(totalCost([{ cost: 1.5 }, null, { cost: null }, { cost: 2.25 }]), 3.75);
+  assert.equal(totalCost([null, { cost: null }]), null);
+  const order = blockedFirst([{ a: 1, status: "idle" }, { a: 2, status: "blocked" }, { a: 3, status: "working" }, { a: 4, status: "blocked" }]);
+  assert.deepEqual(order.map((x) => x.a), [2, 4, 1, 3]);
+});
+
+test("alertOptions: the alerts prop", () => {
+  assert.deepEqual(alertOptions(undefined), { warn: 75, critical: 90, pace: 25, context: 90 });
+  assert.equal(alertOptions(false), null);
+  assert.deepEqual(alertOptions({ warn: 60, pace: false, context: 200, critical: "x" }), { warn: 60, critical: 90, pace: false, context: 90 });
+});
+
+test("contextAlerts: once per session, again after it drops 20 points", () => {
+  const row = (ctxPct, sessionId = "s1") => ({ sessionId, address: "t1", label: "Fix login", ctxPct });
+  let r = contextAlerts([row(85)], new Set(), 90);
+  assert.equal(r.alerts.length, 0);
+  r = contextAlerts([row(91)], r.sent, 90);
+  assert.deepEqual(r.alerts, [{ address: "t1", title: "Fix login: context 91% full", body: "Run /compact, or start a new session, before it compacts on its own." }]);
+  r = contextAlerts([row(95)], r.sent, 90);
+  assert.equal(r.alerts.length, 0);
+  r = contextAlerts([row(75)], r.sent, 90); // still within 20 points: stays warned
+  assert.equal(r.sent.has("s1"), true);
+  r = contextAlerts([row(30)], r.sent, 90); // compacted: armed again
+  assert.equal(r.sent.has("s1"), false);
+  r = contextAlerts([row(92)], r.sent, 90);
+  assert.equal(r.alerts.length, 1);
+  // Gone from the list: forgotten. Without a percent yet: kept as it was.
+  assert.equal(contextAlerts([], r.sent, 90).sent.size, 0);
+  assert.equal(contextAlerts([row(null)], r.sent, 90).sent.has("s1"), true);
+});
+
+test("isLight", () => {
+  assert.equal(isLight("#ffffff"), true);
+  assert.equal(isLight("#f6f5f1"), true);
+  assert.equal(isLight("#16181d"), false);
+  assert.equal(isLight("#2ea043"), false);
+  assert.equal(isLight(undefined), false);
+});
+
+test("fmtAgo", () => {
+  assert.equal(fmtAgo(20000), "just now");
+  assert.equal(fmtAgo(5 * 60000), "5m ago");
+  assert.equal(fmtAgo(2 * 3600000 + 10), "2h ago");
+  assert.equal(fmtAgo(3 * 86400000), "3d ago");
 });
 
 test("extraUsage", () => {
@@ -186,6 +248,18 @@ test("limitAlerts and pickAlert: once per window, the most serious first", () =>
   const next = { ...l(80), resetsAt: resetsAt + 5 * H };
   assert.notEqual(pickAlert(limitAlerts(next, null, now), sent).alert, null);
   assert.deepEqual(pickAlert([], new Set()), { alert: null, mark: [] });
+});
+
+test("limitAlerts with options", () => {
+  const H = 3600000;
+  const now = new Date(2026, 10, 10, 12, 0).getTime();
+  const resetsAt = now + 2 * H;
+  const l = (pct) => ({ name: "5h", what: "5-hour limit", pct, resetsAt });
+  const o = alertOptions({ warn: 60, critical: 80, pace: false });
+  assert.deepEqual(limitAlerts(l(70), pace(l(70), 5 * H, now), now, o).map((a) => a.id), [`5h@${resetsAt}:60`]);
+  assert.deepEqual(limitAlerts(l(85), null, now, o).map((a) => a.id), [`5h@${resetsAt}:80`, `5h@${resetsAt}:60`]);
+  const none = alertOptions({ warn: false, critical: false, pace: false });
+  assert.deepEqual(limitAlerts(l(99), pace(l(99), 5 * H, now), now, none), []);
 });
 
 test("fmtWhen: local time, with the day only when it isn't today", () => {

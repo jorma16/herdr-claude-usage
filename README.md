@@ -4,25 +4,43 @@ A [Herdr](https://herdr.dev) mod that shows Claude Code's usage, from what each 
 hands its status line:
 
 - **Agents** (`props: { "view": "agents" }`, the default): a row per Claude Code agent with
-  its label, model (colored by tier: Opus red, Sonnet orange, Haiku green, others purple),
-  effort, cost so far, and how full its context is (percent, tokens and a bar: green,
-  yellow from 50%, orange from 75%, red from 90%). The tooltip adds its space, session name
-  and context size. Click a row to go to the agent. Right-click it for a panel with all it
-  knows (model id, context, cost, time, lines changed, folder, Claude Code version) and to
-  change its effort or model: it types `/effort <level>` or `/model <alias>` into the agent
-  with `hc send`, only while the agent isn't working. An agent shows `—` until its status
-  line has run once with the feed below.
-- **Quota** (`props: { "view": "quota" }`): the account's 5-hour and 7-day limits, plus the
-  Fable weekly limit when `usage.json` has it, each with a bar and the time left until it
-  resets (exact time in the tooltip). Click it for a panel with each limit's reset time, how
-  much of its window has gone, where it's heading at the current rate (or when it fills up
-  first), Fable's share of the weekly limit, and whether extra usage is on. When the block
-  is too narrow, it drops the time left, then the bars. It also posts a notification once
-  per window when a limit passes 75% or 90%, or (from 25%) is on course to fill up before
-  it resets. Meant for the bottom bar, next to `workspace-status`.
+  a dot for its status, its label, model (colored by tier: Opus red, Sonnet orange, Haiku
+  green, others purple), effort, cost so far, and how full its context is (percent, tokens
+  and a bar: green, yellow from 50%, orange from 75%, red from 90%). Blocked agents come
+  first, and the header shows what they've cost together. The tooltip adds its space,
+  status, session name and context size. Click a row to go to the agent. Right-click it for
+  a panel with all it knows (model id, context, cost, time, lines changed, folder, Claude
+  Code version) and to change its effort or model (or, from 75% context, compact it). It
+  types `/effort <level>`, `/model <alias>` or `/compact` into the agent with `hc send`,
+  only while the agent isn't working. An agent shows `—` until its status line has run once
+  with the feed below, and a new session shows `—` until its first turn. It notifies once
+  when an agent's context reaches 90%; clicking the notification goes to it.
+- **Quota** (`props: { "view": "quota" }`): the account's 5-hour and 7-day limits, plus each
+  model's weekly limit when `usage.json` has them (Fable, say), each with a bar and the time
+  left until it resets (exact time in the tooltip). Click it for a panel with each limit's
+  reset time, how much of its window has gone, where it's heading at the current rate (or
+  when it fills up first), each model's share of the weekly limit, whether extra usage is
+  on, and how old the data is. It dims when no session has updated the limits for 30
+  minutes. When the block is too narrow, it drops the time left, then the bars. It posts a
+  notification once per window when a limit passes 75% or 90%, or (from 25%) is on course
+  to fill up before it resets. Meant for the bottom bar, next to `workspace-status`.
 
-It reads files only; it doesn't call any API. It refreshes when the feed folder changes
+Both follow light and dark themes (darker colors on light ones).
+
+It doesn't call any API: it reads files, runs `stat` on `latest.json` for its age, and runs
+`hc send` only when you click a chip. It refreshes when the feed folder changes
 (`watchFolder`), plus a 30 s timer for new agents and the countdowns.
+
+### Options (props)
+
+| Prop | Values | Default |
+|---|---|---|
+| `view` | `"agents"` or `"quota"` | `"agents"` |
+| `weekly` | `true` (every model's weekly limit), `false` (none), or names: `["fable"]` | `true` |
+| `alerts` | `false` (no notifications), or `{ "warn", "critical", "pace", "context" }`: percents, or `false` for one | `{ "warn": 75, "critical": 90, "pace": 25, "context": 90 }` |
+
+For example `{ "mod": "claude-usage", "props": { "view": "quota", "alerts": { "pace": false } } }`.
+The agents view uses `alerts.context`, the quota view the rest.
 
 ## The feed
 
@@ -53,14 +71,15 @@ Files in `~/.claude/statusline/`:
 |---|---|---|
 | `<session_id>.json` | each session's latest status line input | agents view |
 | `latest.json` | the newest input of any session | 5-hour and 7-day limits |
-| `usage.json` (optional) | Claude's usage endpoint (`/api/oauth/usage`) response, as `/usage` reads it | Fable weekly limit |
+| `usage.json` (optional) | Claude's usage endpoint (`/api/oauth/usage`) response, as `/usage` reads it | per-model weekly limits, extra usage |
 
 The mod matches agents to sessions with Claude Code's own `~/.claude/sessions/<pid>.json`
 (the agent terminal's foreground pid → `sessionId`). Only agents on this machine.
 
 `usage.json` is for scripts that already query the usage endpoint (with the OAuth token
 from the keychain) and cache the answer: cache it at that path. Only cache real answers
-(with `.limits`): an error response would replace the last good one.
+(with `.limits`): an error response would replace the last good one. (The mod keeps the
+last good answer it has read anyway, until it restarts.)
 
 ## Install
 

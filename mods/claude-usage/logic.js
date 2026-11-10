@@ -51,6 +51,7 @@ export function agentInfo(text) {
   const u = cw.current_usage ?? {};
   const summed = (num(u.input_tokens) ?? 0) + (num(u.cache_creation_input_tokens) ?? 0) + (num(u.cache_read_input_tokens) ?? 0);
   return {
+    sessionId: typeof j.session_id === "string" && j.session_id ? j.session_id : null,
     model: j.model?.display_name || j.model?.id || null,
     effort: j.effort?.level || null,
     fast: j.fast_mode === true,
@@ -69,6 +70,22 @@ export function agentInfo(text) {
   };
 }
 
+// A session that hasn't had a turn yet: no cost and nothing in its context.
+export function isFresh(info) {
+  return Boolean(info) && !(info.cost > 0) && !(info.ctxTokens > 0);
+}
+
+// What the agents shown have cost so far, or null when none says.
+export function totalCost(infos) {
+  const costs = infos.map((i) => i?.cost).filter((c) => typeof c === "number");
+  return costs.length ? costs.reduce((a, b) => a + b, 0) : null;
+}
+
+// Agents needing you first (blocked), the rest in their order.
+export function blockedFirst(list) {
+  return [...list.filter((a) => a.status === "blocked"), ...list.filter((a) => a.status !== "blocked")];
+}
+
 // The 5-hour and 7-day limits in a status line input: { five, seven }, each { pct, resetsAt }
 // (resetsAt in ms) or null. A window that has already reset reads 0%.
 export function rateLimits(text, now) {
@@ -83,29 +100,38 @@ export function rateLimits(text, now) {
   return { five: one(rl?.five_hour), seven: one(rl?.seven_day) };
 }
 
-// A model's weekly limit in Claude's usage endpoint response ({ limits: [...] }), as
-// { pct, resetsAt } or null. `model` matches the limit's model name, case-insensitive.
-export function modelWeekly(text, model, now) {
-  const limits = parse(text)?.limits;
-  if (!Array.isArray(limits)) return null;
-  const re = new RegExp(model, "i");
-  const l = limits.find((x) => x?.kind === "weekly_scoped" && re.test(x?.scope?.model?.display_name ?? ""));
-  const pct = num(l?.percent);
-  if (pct === null) return null;
-  const at = Date.parse(l.resets_at ?? "");
-  const resetsAt = Number.isNaN(at) ? null : at;
-  return resetsAt !== null && resetsAt <= now ? { pct: 0, resetsAt: null } : { pct, resetsAt };
+// Whether a usage endpoint response is a real answer (it has `limits`), not an error.
+export function usageOk(text) {
+  return Array.isArray(parse(text)?.limits);
 }
 
-// The share of the weekly limit a model may use, from the usage endpoint's
-// weekly_scoped_shares (allowance_percent_of_weekly), or null.
-export function modelShare(text, model) {
+// Every per-model weekly limit in Claude's usage endpoint response: the `limits` entries
+// with kind "weekly_scoped" and a model, as [{ model, pct, resetsAt, share }]. `share` is how
+// much of the 7-day limit that model may use (weekly_scoped_shares), or null.
+export function weeklyLimits(text, now) {
   const j = parse(text);
-  if (!Array.isArray(j?.limits) || !Array.isArray(j?.weekly_scoped_shares)) return null;
-  const re = new RegExp(model, "i");
-  const i = j.limits.findIndex((x) => x?.kind === "weekly_scoped" && re.test(x?.scope?.model?.display_name ?? ""));
-  if (i < 0) return null;
-  return num(j.weekly_scoped_shares.find((s) => s?.limit_index === i)?.allowance_percent_of_weekly);
+  if (!Array.isArray(j?.limits)) return [];
+  const shares = Array.isArray(j.weekly_scoped_shares) ? j.weekly_scoped_shares : [];
+  const out = [];
+  j.limits.forEach((l, i) => {
+    const model = l?.kind === "weekly_scoped" ? l.scope?.model?.display_name : null;
+    const pct = num(l?.percent);
+    if (typeof model !== "string" || !model || pct === null) return;
+    const at = Date.parse(l.resets_at ?? "");
+    const resetsAt = Number.isNaN(at) ? null : at;
+    const share = num(shares.find((x) => x?.limit_index === i)?.allowance_percent_of_weekly);
+    out.push(resetsAt !== null && resetsAt <= now ? { model, pct: 0, resetsAt: null, share } : { model, pct, resetsAt, share });
+  });
+  return out;
+}
+
+// The weekly limits to show, from the `weekly` prop: all of them when it's missing or true,
+// none when false, else those whose model contains one of its names (case-insensitive).
+export function pickWeekly(list, weekly) {
+  if (weekly === false) return [];
+  if (!Array.isArray(weekly)) return list;
+  const names = weekly.filter((n) => typeof n === "string").map((n) => n.toLowerCase());
+  return list.filter((l) => names.some((n) => l.model.toLowerCase().includes(n)));
 }
 
 // Extra usage (credits past the plan's limits): { enabled, used } with `used` in the
@@ -145,19 +171,36 @@ export function fitLevel(widths, avail, count) {
   return count - 1;
 }
 
-// What's worth a notification about a limit now, most serious first: past 90%, past 75%,
-// or (from 25%) filling up before it resets. Each has an id unique to its window, so it's
-// sent once per window. `l` is { name, what, pct, resetsAt }, `p` its pace (or null).
-export function limitAlerts(l, p, now) {
+// The `alerts` prop with its defaults, or null when alerts are off (`"alerts": false`).
+// warn / critical: a limit's percent; pace: from what percent a limit filling up before its
+// reset is worth an alert (false: never); context: an agent's context percent (false: never).
+export const ALERT_DEFAULTS = { warn: 75, critical: 90, pace: 25, context: 90 };
+export function alertOptions(prop) {
+  if (prop === false) return null;
+  const o = { ...ALERT_DEFAULTS };
+  if (prop && typeof prop === "object") {
+    for (const k of Object.keys(o)) {
+      if (prop[k] === false || (typeof prop[k] === "number" && prop[k] > 0 && prop[k] <= 100)) o[k] = prop[k];
+    }
+  }
+  return o;
+}
+
+// What's worth a notification about a limit now, most serious first: past `critical`, past
+// `warn`, or (from `pace` percent) filling up before it resets. Each has an id unique to its
+// window, so it's sent once per window. `l` is { name, what, pct, resetsAt }, `p` its pace
+// (or null), `o` from alertOptions.
+export function limitAlerts(l, p, now, o = ALERT_DEFAULTS) {
   if (!l?.resetsAt) return [];
   const id = (kind) => `${l.name}@${l.resetsAt}:${kind}`;
   const pct = Math.round(l.pct);
   const resets = `resets ${fmtWhen(l.resetsAt, now)} (in ${fmtLeft(l.resetsAt, now)})`;
   const full = p?.fullAt ? `At this rate, full ${fmtWhen(p.fullAt, now)}, ${resets}` : null;
   const out = [];
-  if (l.pct >= 90) out.push({ id: id(90), level: "error", title: `Claude ${l.what} at ${pct}%`, body: full ?? `It ${resets}` });
-  if (l.pct >= 75) out.push({ id: id(75), level: "warning", title: `Claude ${l.what} at ${pct}%`, body: full ?? `It ${resets}` });
-  if (full && l.pct >= 25 && l.pct < 90) {
+  const critical = o.critical === false ? Infinity : o.critical;
+  if (l.pct >= critical) out.push({ id: id(critical), level: "error", title: `Claude ${l.what} at ${pct}%`, body: full ?? `It ${resets}` });
+  if (o.warn !== false && l.pct >= o.warn) out.push({ id: id(o.warn), level: "warning", title: `Claude ${l.what} at ${pct}%`, body: full ?? `It ${resets}` });
+  if (full && o.pace !== false && l.pct >= o.pace && l.pct < critical) {
     out.push({ id: id("pace"), level: "warning", title: `Claude ${l.what} filling up: ${pct}% used`, body: full });
   }
   return out;
@@ -169,6 +212,45 @@ export function limitAlerts(l, p, now) {
 export function pickAlert(alerts, sent) {
   if (alerts.length === 0 || sent.has(alerts[0].id)) return { alert: null, mark: [] };
   return { alert: alerts[0], mark: alerts.map((a) => a.id) };
+}
+
+// Which agents to warn about a nearly full context, and the sessions warned so far. An
+// agent is warned once when its context reaches `threshold`, and again only after it has
+// dropped 20 points below (after a /compact, say). `rows` are { sessionId, address, label,
+// ctxPct }; `sent` the session ids already warned. Sessions no longer listed are forgotten.
+export function contextAlerts(rows, sent, threshold) {
+  const next = new Set();
+  const alerts = [];
+  for (const r of rows) {
+    if (!r.sessionId || r.ctxPct === null || r.ctxPct === undefined) {
+      if (r.sessionId && sent.has(r.sessionId)) next.add(r.sessionId);
+      continue;
+    }
+    const was = sent.has(r.sessionId);
+    if (r.ctxPct >= threshold) {
+      next.add(r.sessionId);
+      if (!was) {
+        alerts.push({
+          address: r.address,
+          title: `${r.label}: context ${Math.round(r.ctxPct)}% full`,
+          body: "Run /compact, or start a new session, before it compacts on its own.",
+        });
+      }
+    } else if (was && r.ctxPct > threshold - 20) {
+      next.add(r.sessionId);
+    }
+  }
+  return { alerts, sent: next };
+}
+
+// How long ago, short: "just now", "5m ago", "2h ago", "3d ago".
+export function fmtAgo(ms) {
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
 }
 
 // 4322 -> "4.3K", 200000 -> "200K", 1200000 -> "1.2M".
@@ -219,6 +301,17 @@ export function fmtWhen(at, now) {
   if (days === 0) return `today ${time}`;
   if (days === 1) return `tomorrow ${time}`;
   return `${DAYS[d.getDay()]} ${time}`;
+}
+
+// Whether a #rrggbb color is light (relative luminance over 0.5), e.g. a light theme's chrome.
+export function isLight(hex) {
+  const m = /^#?([0-9a-f]{6})/i.exec(hex ?? "");
+  if (!m) return false;
+  const [r, g, b] = [0, 2, 4].map((i) => {
+    const c = parseInt(m[1].slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5;
 }
 
 // How full, as a step for its color: 0 fine, 1 half, 2 three quarters, 3 nearly full.

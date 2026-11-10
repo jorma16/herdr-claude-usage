@@ -14,7 +14,10 @@ hands its status line:
   line has run once with the feed below.
 - **Quota** (`props: { "view": "quota" }`): the account's 5-hour and 7-day limits, plus the
   Fable weekly limit when `usage.json` has it, each with a bar and the time left until it
-  resets (exact time in the tooltip). Meant for the bottom bar, next to `workspace-status`.
+  resets (exact time in the tooltip). Click it for a panel with each limit's reset time, how
+  much of its window has gone, where it's heading at the current rate (or when it fills up
+  first), Fable's share of the weekly limit, and whether extra usage is on. Meant for the
+  bottom bar, next to `workspace-status`.
 
 It reads files only; it doesn't call any API. It refreshes when the feed folder changes
 (`watchFolder`), plus a 30 s timer for new agents and the countdowns.

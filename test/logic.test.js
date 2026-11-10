@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clean, label, sessionPids, sessionIdOf, agentInfo, rateLimits, modelWeekly, fmtTokens, fmtCost, fmtDuration, shortPath, fmtLeft, level, tier, family } from "../mods/claude-usage/logic.js";
+import { clean, label, sessionPids, sessionIdOf, agentInfo, rateLimits, modelWeekly, modelShare, extraUsage, pace, fmtTokens, fmtCost, fmtDuration, shortPath, fmtLeft, fmtWhen, level, tier, family } from "../mods/claude-usage/logic.js";
 
 const feed = {
   session_id: "s1",
@@ -95,6 +95,55 @@ test("modelWeekly: a model's weekly limit from the usage endpoint", () => {
   assert.deepEqual(modelWeekly(usage, "fable", Date.parse("2026-11-09T00:00:00Z")), { pct: 0, resetsAt: null });
   // The endpoint answers errors in the same file when rate limited.
   assert.equal(modelWeekly('{"error":{"type":"rate_limit_error"}}', "fable", now), null);
+});
+
+test("modelShare: how much of the weekly limit a model may use", () => {
+  const usage = JSON.stringify({
+    limits: [
+      { kind: "session", percent: 18 },
+      { kind: "weekly_all", percent: 17 },
+      { kind: "weekly_scoped", percent: 0, scope: { model: { display_name: "Fable" } } },
+    ],
+    weekly_scoped_shares: [{ limit_index: 2, used_percent_of_weekly: 0, allowance_percent_of_weekly: 50 }],
+  });
+  assert.equal(modelShare(usage, "fable"), 50);
+  assert.equal(modelShare(usage, "opus"), null);
+  assert.equal(modelShare('{"limits":[]}', "fable"), null);
+  assert.equal(modelShare(null, "fable"), null);
+});
+
+test("extraUsage", () => {
+  assert.deepEqual(extraUsage(JSON.stringify({ extra_usage: { is_enabled: false }, spend: { used: { amount_minor: 1250, currency: "EUR", exponent: 2 } } })),
+    { enabled: false, used: { amount: 12.5, currency: "EUR" } });
+  assert.deepEqual(extraUsage(JSON.stringify({ extra_usage: { is_enabled: true } })), { enabled: true, used: null });
+  assert.equal(extraUsage('{"limits":[]}'), null);
+});
+
+test("pace: where a limit is heading at its current rate", () => {
+  const H = 3600000;
+  const resetsAt = 10 * H;
+  // 5-hour window from 5h to 10h; at 7h, 40% of it has gone.
+  const p = pace({ pct: 20, resetsAt }, 5 * H, 7 * H);
+  assert.ok(Math.abs(p.elapsedPct - 40) < 1e-9);
+  assert.ok(Math.abs(p.projected - 50) < 1e-9);
+  assert.equal(p.fullAt, null);
+  // 60% used at 40% of the window: full at 2/3 of it, before the reset.
+  const q = pace({ pct: 60, resetsAt }, 5 * H, 7 * H);
+  assert.ok(Math.abs(q.projected - 150) < 1e-9);
+  assert.ok(Math.abs(q.fullAt - (5 * H + (10 * H) / 3)) < 1);
+  // Nothing used: no full time.
+  assert.equal(pace({ pct: 0, resetsAt }, 5 * H, 7 * H).fullAt, null);
+  // Too early, outside the window, or without a reset time.
+  assert.equal(pace({ pct: 5, resetsAt }, 5 * H, 5.1 * H), null);
+  assert.equal(pace({ pct: 5, resetsAt }, 5 * H, 11 * H), null);
+  assert.equal(pace({ pct: 5, resetsAt: null }, 5 * H, 7 * H), null);
+});
+
+test("fmtWhen: local time, with the day only when it isn't today", () => {
+  const now = new Date(2026, 10, 10, 11, 0).getTime(); // Tue
+  assert.equal(fmtWhen(new Date(2026, 10, 10, 14, 40).getTime(), now), "today 14:40");
+  assert.equal(fmtWhen(new Date(2026, 10, 11, 9, 5).getTime(), now), "tomorrow 09:05");
+  assert.equal(fmtWhen(new Date(2026, 10, 14, 2, 0).getTime(), now), "Sat 02:00");
 });
 
 test("fmtCost", () => {

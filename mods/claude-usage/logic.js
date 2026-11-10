@@ -97,6 +97,47 @@ export function modelWeekly(text, model, now) {
   return resetsAt !== null && resetsAt <= now ? { pct: 0, resetsAt: null } : { pct, resetsAt };
 }
 
+// The share of the weekly limit a model may use, from the usage endpoint's
+// weekly_scoped_shares (allowance_percent_of_weekly), or null.
+export function modelShare(text, model) {
+  const j = parse(text);
+  if (!Array.isArray(j?.limits) || !Array.isArray(j?.weekly_scoped_shares)) return null;
+  const re = new RegExp(model, "i");
+  const i = j.limits.findIndex((x) => x?.kind === "weekly_scoped" && re.test(x?.scope?.model?.display_name ?? ""));
+  if (i < 0) return null;
+  return num(j.weekly_scoped_shares.find((s) => s?.limit_index === i)?.allowance_percent_of_weekly);
+}
+
+// Extra usage (credits past the plan's limits): { enabled, used } with `used` in the
+// currency's units (or null), or null when the response doesn't say.
+export function extraUsage(text) {
+  const j = parse(text);
+  if (typeof j?.extra_usage?.is_enabled !== "boolean") return null;
+  const u = j.spend?.used;
+  const minor = num(u?.amount_minor);
+  const used = minor === null ? null : { amount: minor / 10 ** (num(u.exponent) ?? 2), currency: u.currency || "USD" };
+  return { enabled: j.extra_usage.is_enabled, used };
+}
+
+// Where a limit is heading at its current rate, for a window `windowMs` long that ends at
+// l.resetsAt: { elapsedPct, projected, fullAt }. projected is the % it would reach by the
+// reset; fullAt (ms) is when it would hit 100% if that's before the reset, else null.
+// null without a reset time, or in the window's first 5%, when the rate means little.
+export function pace(l, windowMs, now) {
+  if (!l?.resetsAt) return null;
+  const start = l.resetsAt - windowMs;
+  const elapsed = now - start;
+  if (elapsed <= 0 || elapsed > windowMs) return null;
+  const frac = elapsed / windowMs;
+  if (frac < 0.05) return null;
+  const fullAt = l.pct > 0 ? start + (elapsed * 100) / l.pct : null;
+  return {
+    elapsedPct: frac * 100,
+    projected: l.pct / frac,
+    fullAt: fullAt !== null && fullAt < l.resetsAt ? fullAt : null,
+  };
+}
+
 // 4322 -> "4.3K", 200000 -> "200K", 1200000 -> "1.2M".
 export function fmtTokens(n) {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, "")}M`;
@@ -133,6 +174,18 @@ export function fmtLeft(at, now) {
   if (d > 0) return `${d}d${h}h`;
   if (h > 0) return `${h}h${m}m`;
   return `${m}m`;
+}
+
+// A moment soon, in local time: "14:40" today, "tomorrow 09:05", else "Sat 02:00".
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+export function fmtWhen(at, now) {
+  const d = new Date(at);
+  const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const day = (x) => new Date(x).setHours(0, 0, 0, 0);
+  const days = Math.round((day(at) - day(now)) / 86400000);
+  if (days === 0) return `today ${time}`;
+  if (days === 1) return `tomorrow ${time}`;
+  return `${DAYS[d.getDay()]} ${time}`;
 }
 
 // How full, as a step for its color: 0 fine, 1 half, 2 three quarters, 3 nearly full.

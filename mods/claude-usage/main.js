@@ -5,6 +5,7 @@
 //                       details and to change its effort or model.
 //   "quota":            the account's limits (5 hours, 7 days, and a model's weekly one when
 //                       the usage cache has it), each with the time left until it resets.
+//                       Click it for each limit's reset time and where it's heading.
 // The status line script writes the feed (see README.md): ~/.claude/statusline/<session>.json,
 // latest.json (the newest of them) and, optionally, usage.json (Claude's usage endpoint).
 // Agents are matched to sessions through ~/.claude/sessions/<pid>.json, Claude Code's own.
@@ -12,7 +13,7 @@
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex, Popover } from "gpui-base";
 import { agents, spaces, terminals, props, run, theme, home, readTextFile, watchFolder, hc, notify } from "herdr";
-import { label, tabsById, sessionPids, sessionIdOf, agentInfo, rateLimits, modelWeekly, fmtTokens, fmtCost, fmtDuration, shortPath, fmtLeft, level, tier, family } from "./logic.js";
+import { label, tabsById, sessionPids, sessionIdOf, agentInfo, rateLimits, modelWeekly, modelShare, extraUsage, pace, fmtTokens, fmtCost, fmtDuration, shortPath, fmtLeft, fmtWhen, level, tier, family } from "./logic.js";
 
 // Fill colors by level (see logic.js), readable on light and dark themes.
 const LEVEL_COLORS = ["#2ea043", "#d4a72c", "#e36209", "#d73a49"];
@@ -20,6 +21,9 @@ const LEVEL_COLORS = ["#2ea043", "#d4a72c", "#e36209", "#d73a49"];
 const TIER_COLORS = { opus: "#d73a49", sonnet: "#e36209", haiku: "#2ea043", other: "#a371f7" };
 // The model whose weekly limit the quota view shows, when usage.json has one.
 const WEEKLY_MODEL = { match: "fable", label: "Fable" };
+// How long each limit's window is, for its pace.
+const HOUR = 3600000;
+const WINDOW = { five: 5 * HOUR, seven: 7 * 24 * HOUR };
 // What the details panel offers: `/effort <level>` and `/model <alias>`, typed into the agent.
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const MODELS = [["fable", "Fable"], ["opus", "Opus"], ["sonnet", "Sonnet"], ["haiku", "Haiku"]];
@@ -32,8 +36,6 @@ function bar(t, pct, w) {
     .child(div().h_full().w(`${p}%`).rounded(2).bg(LEVEL_COLORS[level(p)]));
 }
 
-const when = (at) => new Date(at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
-
 export default class ClaudeUsage extends View {
   init(_props, cx) {
     this.view = props()?.view === "quota" ? "quota" : "agents";
@@ -43,7 +45,7 @@ export default class ClaudeUsage extends View {
     this.latest = null; // latest.json's text
     this.usage = null; // usage.json's text
     this.key = ""; // what was last shown, to repaint only on a change
-    this.menu = null; // the address whose details panel is open
+    this.menu = null; // the address whose details panel is open, or "quota"
     this.watch(cx, this.dir);
     if (this.view === "agents") this.watch(cx, this.sessions);
     cx.timer.every(TICK, (cx) => {
@@ -100,25 +102,87 @@ export default class ClaudeUsage extends View {
   quota() {
     const t = theme();
     const now = Date.now();
-    const { five, seven } = rateLimits(this.latest, now);
-    const weekly = modelWeekly(this.usage, WEEKLY_MODEL.match, now);
-    const items = [["5h", "5-hour limit", five], ["7d", "7-day limit", seven], [WEEKLY_MODEL.label, `${WEEKLY_MODEL.label} weekly limit`, weekly]]
-      .filter(([, , l]) => l)
-      .map(([name, what, l]) => this.limit(t, name, what, l, now));
-    return h_flex().id("cu-quota").size_full().px(14).gap(16).items_center().justify_end()
-      .bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8).text_color(t.muted)
-      .when(items.length === 0, (el) => el.child(div().text_color(t.dim).child("No Claude usage yet")))
+    const limits = this.limits(now);
+    const open = this.menu === "quota";
+    const items = limits.map((l) => this.limit(t, l, now, !open));
+    const strip = h_flex().id("cu-quota").size_full().px(14).items_center().justify_end()
+      .bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8).text_color(t.muted);
+    if (items.length === 0) return strip.child(div().text_color(t.dim).child("No Claude usage yet"));
+    const trigger = h_flex().id("cu-limits").h_full().px(6).gap(16).items_center().rounded(4).cursor_pointer()
+      .when(open, (el) => el.bg(t.hover))
+      .hover((s) => s.bg(t.hover))
       .children(items);
+    return strip.child(Popover.new("cu-pop-quota").anchor("bottom_right")
+      .open(open)
+      .on_open_change((o, cx) => {
+        this.menu = o ? "quota" : null;
+        cx.notify();
+      })
+      .trigger(trigger)
+      .content(this.quotaDetails(t, limits, now)));
   }
 
-  limit(t, name, what, l, now) {
+  // The limits there's data for: { key, name, what, pct, resetsAt, window }.
+  limits(now) {
+    const { five, seven } = rateLimits(this.latest, now);
+    const weekly = modelWeekly(this.usage, WEEKLY_MODEL.match, now);
+    return [
+      ["5h", "5-hour limit", five, WINDOW.five],
+      ["7d", "7-day limit", seven, WINDOW.seven],
+      [WEEKLY_MODEL.label, `${WEEKLY_MODEL.label} weekly limit`, weekly, WINDOW.seven],
+    ].filter(([, , l]) => l).map(([name, what, l, window]) => ({ name, what, window, ...l }));
+  }
+
+  limit(t, l, now, tooltip) {
     const left = l.resetsAt ? fmtLeft(l.resetsAt, now) : null;
-    const tip = `${what}: ${Math.round(l.pct)}% used${l.resetsAt ? `, resets ${when(l.resetsAt)} (in ${left})` : ""}`;
-    return h_flex().id(`cu-${name}`).flex_none().gap(6).items_center().tooltip(tip)
-      .child(div().text_color(t.dim).child(name))
+    const tip = `${l.what}: ${Math.round(l.pct)}% used${l.resetsAt ? `, resets ${fmtWhen(l.resetsAt, now)} (in ${left})` : ""}`;
+    return h_flex().id(`cu-${l.name}`).flex_none().gap(6).items_center()
+      .when(tooltip, (el) => el.tooltip(`${tip} · click for details`))
+      .child(div().text_color(t.dim).child(l.name))
       .child(bar(t, l.pct, 36))
       .child(div().font_medium().text_color(LEVEL_COLORS[level(l.pct)]).child(`${Math.round(l.pct)}%`))
       .when(Boolean(left), (el) => el.child(div().text_color(t.dim).child(left)));
+  }
+
+  // The click panel: each limit with its reset time and pace, then the plan's extras.
+  quotaDetails(t, limits, now) {
+    const share = modelShare(this.usage, WEEKLY_MODEL.match);
+    const extra = extraUsage(this.usage);
+    const section = (l) => {
+      const p = pace(l, l.window, now);
+      const color = LEVEL_COLORS[level(l.pct)];
+      const lines = [
+        l.resetsAt ? `Resets ${fmtWhen(l.resetsAt, now)} · in ${fmtLeft(l.resetsAt, now)}` : "Not started: the window opens with your next message",
+        p ? `${Math.round(p.elapsedPct)}% of the window gone` : null,
+        l.name === WEEKLY_MODEL.label && share !== null ? `Can use up to ${share}% of the 7-day limit` : null,
+      ].filter(Boolean);
+      // At this rate: full before the reset (warn), or the % it reaches by then.
+      const heading = !p || l.pct === 0 ? null
+        : p.fullAt ? [`At this rate, full ${fmtWhen(p.fullAt, now)} (in ${fmtLeft(p.fullAt, now)})`, LEVEL_COLORS[3]]
+        : [`At this rate, ~${Math.round(p.projected)}% by the reset`, LEVEL_COLORS[level(p.projected)]];
+      return v_flex().gap(4)
+        .child(h_flex().gap(8).items_center()
+          .child(div().flex_1().text_color(t.foreground).child(l.what))
+          .child(div().font_medium().text_color(color).child(`${Math.round(l.pct)}% used`)))
+        .child(this.paceBar(t, l.pct, p?.elapsedPct ?? null))
+        .child(v_flex().gap(2).text_size(11).text_color(t.dim).children(lines.map((x) => div().child(x))))
+        .when(Boolean(heading), (el) => el.child(div().text_size(11).text_color(heading[1]).child(heading[0])));
+    };
+    const extraLine = !extra ? null
+      : extra.enabled ? `Extra usage on${extra.used ? ` · ${extra.used.amount.toFixed(2)} ${extra.used.currency} used` : ""}`
+      : "Extra usage off: you stop at the plan's limits";
+    return v_flex().id("cu-quota-details").w(300).p(12).gap(12).rounded(8).border(1).border_color(t.border)
+      .bg(t.popover).shadow_lg().text_size(12)
+      .child(div().font_medium().text_color(t.foreground).child("Claude usage"))
+      .children(limits.map(section))
+      .when(Boolean(extraLine), (el) => el.child(div().pt(8).border_t(1).border_color(t.border).text_size(11).text_color(t.dim).child(extraLine)));
+  }
+
+  // A full-width bar with a tick where the time is: past the tick, usage runs ahead of time.
+  paceBar(t, pct, elapsedPct) {
+    const b = bar(t, pct, "100%").relative();
+    if (elapsedPct === null) return b;
+    return b.child(div().absolute().top(-2).h(8).w(2).rounded(1).bg(t.foreground).left(`${Math.min(100, elapsedPct)}%`));
   }
 
   // ---- agents view: a row per Claude Code agent ------------------------------------------

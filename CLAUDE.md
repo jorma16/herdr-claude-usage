@@ -14,3 +14,5 @@ for what it does, the status line feed it reads, and the layout blocks.
 - Before calling a change done: `npm test`, `npm run check`, and look at it in the app
   (`herdr-app shot`). The check only covers the first render.
 - Mind performance: no `.loop()` animations, and no timer faster than the 30 s one.
+- [RECIPE.md](RECIPE.md) and `preview.png` are what herdr.dev/mods shows (the brief format
+  is in Herdr's `AGENTS.md`). Update them when what the mod shows or does changes.
